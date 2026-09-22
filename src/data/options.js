@@ -18,5 +18,4 @@ export const festeEssensOrte = [
     { value: 'raum', text: 'Im Raum' },
     { value: 'kosmos', text: 'Kosmos' },
     { value: 'draussen', text: 'Irgendwo draußen' },
-    { value: 'marvin', text: 'Bei Marvin' }
 ]
