@@ -73,7 +73,7 @@ function speichern() {
 }
 
 // --------------------------------------------------
-// Bearbeiten
+// Speichern
 // --------------------------------------------------
 
 function bearbeiten(planung) {
@@ -129,6 +129,7 @@ function abbrechen() {
         </div>
 
       </section>
+>>>>>>> 1b468ce90252558d7329a7c329253c65d463b9ea
 
       <!-- Statistik-Komponente -->
       <LunchStats :anzahl-teilnehmer="anzahlTeilnehmer" :anzahl-essen-dabei="anzahlEssenDabei"
