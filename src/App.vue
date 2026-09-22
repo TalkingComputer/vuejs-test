@@ -33,6 +33,8 @@ const {
   bearbeitungsId,
 
   planungen,
+  wirdGeladen,
+  ladeFehler,
 
   anzahlTeilnehmer,
   anzahlEssenDabei,
@@ -64,8 +66,8 @@ function neuePlanung() {
 // Speichern
 // --------------------------------------------------
 
-function speichern() {
-  const erfolgreich = planungSpeichern()
+async function speichern() {
+  const erfolgreich = await planungSpeichern()
 
   if (erfolgreich) {
     ansicht.value = 'start'
@@ -129,7 +131,15 @@ function abbrechen() {
         </div>
 
       </section>
->>>>>>> 1b468ce90252558d7329a7c329253c65d463b9ea
+
+      <!-- Lade- und Fehlerzustand -->
+      <p v-if="wirdGeladen" class="status-hinweis">
+        Planungen werden geladen …
+      </p>
+
+      <p v-if="ladeFehler" class="status-hinweis status-fehler">
+        ⚠️ {{ ladeFehler }}
+      </p>
 
       <!-- Statistik-Komponente -->
       <LunchStats :anzahl-teilnehmer="anzahlTeilnehmer" :anzahl-essen-dabei="anzahlEssenDabei"
@@ -342,6 +352,25 @@ function abbrechen() {
   font-weight: 600;
 
   color: #343a31;
+}
+
+/* --------------------------------------------------
+   Status
+-------------------------------------------------- */
+
+.status-hinweis {
+  margin: 20px 0 0;
+  padding: 12px 15px;
+  border-radius: 11px;
+  background: #eef2ea;
+  color: #444b41;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-fehler {
+  background: #fff1ee;
+  color: #9d4336;
 }
 
 /* --------------------------------------------------

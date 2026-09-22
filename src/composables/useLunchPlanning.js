@@ -2,7 +2,8 @@ import {
   ref,
   computed,
   watch,
-  onMounted
+  onMounted,
+  onUnmounted
 } from 'vue'
 
 import {
@@ -10,6 +11,8 @@ import {
   doenerOptionen,
   festeEssensOrte
 } from '../data/options'
+
+import { supabase } from '../lib/supabase'
 
 export function useLunchPlanning() {
   // --------------------------------------------------
@@ -32,27 +35,73 @@ export function useLunchPlanning() {
   // --------------------------------------------------
 
   const planungen = ref([])
+  const wirdGeladen = ref(false)
+  const ladeFehler = ref('')
+
+  // Datenbank-Zeile (snake_case) auf unser
+  // Formular-Objekt (camelCase) abbilden
+  function zeileZuPlanung(zeile) {
+    return {
+      id: zeile.id,
+      name: zeile.name,
+      essenDabei: zeile.essen_dabei,
+      essenHolen: zeile.essen_holen ?? '',
+      welcherDoener: zeile.welcher_doener ?? '',
+      andererDoener: zeile.anderer_doener ?? '',
+      andererEssensOrt: zeile.anderer_essens_ort ?? '',
+      essensOrt: zeile.essens_ort
+    }
+  }
+
+  async function planungenLaden() {
+    wirdGeladen.value = true
+    ladeFehler.value = ''
+
+    const { data, error } = await supabase
+      .from('planungen')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      ladeFehler.value =
+        'Die Planungen konnten nicht geladen werden.'
+      console.error(error)
+    } else {
+      planungen.value = data.map(zeileZuPlanung)
+    }
+
+    wirdGeladen.value = false
+  }
+
+  // Planungen beim Start laden und bei Änderungen
+  // anderer Nutzer automatisch aktualisieren
+  // (Supabase Realtime)
+  let realtimeChannel = null
 
   onMounted(() => {
-    const gespeichertePlanungen =
-      localStorage.getItem('planungen')
+    planungenLaden()
 
-    if (gespeichertePlanungen) {
-      planungen.value =
-        JSON.parse(gespeichertePlanungen)
-    }
+    realtimeChannel = supabase
+      .channel('planungen-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'planungen'
+        },
+        () => {
+          planungenLaden()
+        }
+      )
+      .subscribe()
   })
 
-  watch(
-    planungen,
-    (neuePlanungen) => {
-      localStorage.setItem(
-        'planungen',
-        JSON.stringify(neuePlanungen)
-      )
-    },
-    { deep: true }
-  )
+  onUnmounted(() => {
+    if (realtimeChannel) {
+      supabase.removeChannel(realtimeChannel)
+    }
+  })
 
   // --------------------------------------------------
   // Abhängige Eingaben zurücksetzen
@@ -465,7 +514,7 @@ export function useLunchPlanning() {
   // Speichern
   // --------------------------------------------------
 
-  function planungSpeichern() {
+  async function planungSpeichern() {
     fehler.value = ''
 
     if (!name.value) {
@@ -546,52 +595,55 @@ export function useLunchPlanning() {
     }
 
     const planung = {
-      id:
-        bearbeitungsId.value ??
-        Date.now(),
-
       name:
         name.value,
 
-      essenDabei:
+      essen_dabei:
         essenDabei.value,
 
-      essenHolen:
-        essenHolen.value,
+      essen_holen:
+        essenDabei.value === 'nein'
+          ? essenHolen.value
+          : null,
 
-      welcherDoener:
-        welcherDoener.value,
+      welcher_doener:
+        essenHolen.value === 'doener'
+          ? welcherDoener.value
+          : null,
 
-      andererDoener:
-        andererDoener.value,
+      anderer_doener:
+        welcherDoener.value === 'anderer'
+          ? andererDoener.value
+          : null,
 
-      andererEssensOrt:
-        andererEssensOrt.value,
+      anderer_essens_ort:
+        essenHolen.value === 'andererOrt' ||
+        essensOrt.value === 'andererOrt'
+          ? andererEssensOrt.value
+          : null,
 
-      essensOrt:
+      essens_ort:
         essensOrt.value
     }
 
-    if (
+    const { error } =
       bearbeitungsId.value !== null
-    ) {
-      const index =
-        planungen.value.findIndex(
-          (eintrag) =>
-            eintrag.id ===
-            bearbeitungsId.value
-        )
+        ? await supabase
+            .from('planungen')
+            .update(planung)
+            .eq('id', bearbeitungsId.value)
+        : await supabase
+            .from('planungen')
+            .insert(planung)
 
-      if (index !== -1) {
-        planungen.value[index] =
-          planung
-      }
-    } else {
-      planungen.value.push(
-        planung
-      )
+    if (error) {
+      fehler.value =
+        'Speichern hat nicht geklappt. Bitte versuch es erneut.'
+      console.error(error)
+      return false
     }
 
+    await planungenLaden()
     formularZuruecksetzen()
 
     return true
@@ -634,12 +686,18 @@ export function useLunchPlanning() {
   // Löschen
   // --------------------------------------------------
 
-  function planungLoeschen(id) {
-    planungen.value =
-      planungen.value.filter(
-        (planung) =>
-          planung.id !== id
-      )
+  async function planungLoeschen(id) {
+    const { error } = await supabase
+      .from('planungen')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error(error)
+      return
+    }
+
+    await planungenLaden()
   }
 
   // --------------------------------------------------
@@ -676,6 +734,8 @@ export function useLunchPlanning() {
     bearbeitungsId,
 
     planungen,
+    wirdGeladen,
+    ladeFehler,
 
     anzahlTeilnehmer,
     anzahlEssenDabei,
