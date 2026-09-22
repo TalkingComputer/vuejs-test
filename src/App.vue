@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { supabase } from './lib/supabase'
 
 // --------------------------------------------------
 // Navigation
@@ -26,24 +27,65 @@ const bearbeitungsId = ref(null)
 // --------------------------------------------------
 
 const planungen = ref([])
+const wirdGeladen = ref(false)
+const ladeFehler = ref('')
 
-// Gespeicherte Planungen beim Start laden
-onMounted(() => {
-  const gespeichertePlanungen = localStorage.getItem('planungen')
-
-  if (gespeichertePlanungen) {
-    planungen.value = JSON.parse(gespeichertePlanungen)
+// Datenbank-Zeile (snake_case) auf unser Formular-Objekt (camelCase) abbilden
+function zeileZuPlanung(zeile) {
+  return {
+    id: zeile.id,
+    name: zeile.name,
+    essenDabei: zeile.essen_dabei,
+    essenHolen: zeile.essen_holen ?? '',
+    welcherDoener: zeile.welcher_doener ?? '',
+    andererDoener: zeile.anderer_doener ?? '',
+    essensOrt: zeile.essens_ort
   }
+}
+
+async function planungenLaden() {
+  wirdGeladen.value = true
+  ladeFehler.value = ''
+
+  const { data, error } = await supabase
+    .from('planungen')
+    .select('*')
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    ladeFehler.value = 'Die Planungen konnten nicht geladen werden.'
+    console.error(error)
+  } else {
+    planungen.value = data.map(zeileZuPlanung)
+  }
+
+  wirdGeladen.value = false
+}
+
+// Planungen beim Start laden und bei Änderungen anderer
+// Nutzer automatisch aktualisieren (Supabase Realtime)
+let realtimeChannel = null
+
+onMounted(() => {
+  planungenLaden()
+
+  realtimeChannel = supabase
+    .channel('planungen-changes')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'planungen' },
+      () => {
+        planungenLaden()
+      }
+    )
+    .subscribe()
 })
 
-// Bei Änderungen automatisch speichern
-watch(
-  planungen,
-  (neuePlanungen) => {
-    localStorage.setItem('planungen', JSON.stringify(neuePlanungen))
-  },
-  { deep: true }
-)
+onUnmounted(() => {
+  if (realtimeChannel) {
+    supabase.removeChannel(realtimeChannel)
+  }
+})
 
 // --------------------------------------------------
 // Abhängige Eingaben zurücksetzen
@@ -100,7 +142,7 @@ const anzahlKosmos = computed(() => {
 // Formular speichern
 // --------------------------------------------------
 
-function planungSpeichern() {
+async function planungSpeichern() {
   fehler.value = ''
 
   if (!name.value) {
@@ -140,27 +182,31 @@ function planungSpeichern() {
   }
 
   const planung = {
-    id: bearbeitungsId.value ?? Date.now(),
     name: name.value,
-    essenDabei: essenDabei.value,
-    essenHolen: essenHolen.value,
-    welcherDoener: welcherDoener.value,
-    andererDoener: andererDoener.value,
-    essensOrt: essensOrt.value
+    essen_dabei: essenDabei.value,
+    essen_holen: essenDabei.value === 'nein' ? essenHolen.value : null,
+    welcher_doener: essenHolen.value === 'doener' ? welcherDoener.value : null,
+    anderer_doener: welcherDoener.value === 'anderer' ? andererDoener.value : null,
+    essens_ort: essensOrt.value
   }
 
-  if (bearbeitungsId.value !== null) {
-    const index = planungen.value.findIndex(
-      (eintrag) => eintrag.id === bearbeitungsId.value
-    )
+  const { error } =
+    bearbeitungsId.value !== null
+      ? await supabase
+          .from('planungen')
+          .update(planung)
+          .eq('id', bearbeitungsId.value)
+      : await supabase
+          .from('planungen')
+          .insert(planung)
 
-    if (index !== -1) {
-      planungen.value[index] = planung
-    }
-  } else {
-    planungen.value.push(planung)
+  if (error) {
+    fehler.value = 'Speichern hat nicht geklappt. Bitte versuch es erneut.'
+    console.error(error)
+    return
   }
 
+  await planungenLaden()
   formularZuruecksetzen()
   ansicht.value = 'start'
 }
@@ -186,10 +232,18 @@ function planungBearbeiten(planung) {
 // Löschen
 // --------------------------------------------------
 
-function planungLoeschen(id) {
-  planungen.value = planungen.value.filter(
-    (planung) => planung.id !== id
-  )
+async function planungLoeschen(id) {
+  const { error } = await supabase
+    .from('planungen')
+    .delete()
+    .eq('id', id)
+
+  if (error) {
+    console.error(error)
+    return
+  }
+
+  await planungenLaden()
 }
 
 // --------------------------------------------------
@@ -303,6 +357,15 @@ function neuePlanung() {
           🥪
         </div>
       </section>
+
+      <!-- Lade- und Fehlerzustand -->
+      <p v-if="wirdGeladen" class="status-hinweis">
+        Planungen werden geladen …
+      </p>
+
+      <p v-if="ladeFehler" class="status-hinweis status-fehler">
+        ⚠️ {{ ladeFehler }}
+      </p>
 
       <!-- Statistik -->
       <section class="stats">
@@ -856,6 +919,23 @@ nav {
   padding: 11px 16px;
   font-weight: 600;
   color: #343a31;
+}
+
+/* Status */
+
+.status-hinweis {
+  margin: 20px 0 0;
+  padding: 12px 15px;
+  border-radius: 11px;
+  background: #eef2ea;
+  color: #444b41;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-fehler {
+  background: #fff1ee;
+  color: #9d4336;
 }
 
 /* Statistik */
